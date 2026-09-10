@@ -2,6 +2,7 @@
 // 状態を変更しない計算は observables.js に置く。
 
 import { fft, ifft } from "./fft.js";
+import { branchSpinors, spectrum, branchWeights } from "./observables.js";
 
 /**
  * 周期境界の一様格子を作る。
@@ -40,6 +41,9 @@ export function createSolver(grid) {
     m: 1,
     t: 0,
     step,
+    setPacket,
+    projectToBranch,
+    normalize,
   };
 
   /**
@@ -114,6 +118,123 @@ export function createSolver(grid) {
     kineticStep(dt);
     potentialStep(dt / 2);
     solver.t += dt;
+  }
+
+  /** ノルムを 1 にする。ノルムが 0 のときは何もしない。 */
+  function normalize() {
+    const { re1, im1, re2, im2 } = state;
+    let sum = 0;
+    for (let j = 0; j < N; j++) {
+      sum += re1[j] ** 2 + im1[j] ** 2 + re2[j] ** 2 + im2[j] ** 2;
+    }
+    sum *= grid.h;
+    if (!(sum > 1e-300)) return;
+    const f = 1 / Math.sqrt(sum);
+    for (let j = 0; j < N; j++) {
+      re1[j] *= f; im1[j] *= f; re2[j] *= f; im2[j] *= f;
+    }
+  }
+
+  /**
+   * ガウス波束を作る。
+   *
+   * "+" / "-" / "mix" は k 空間で分枝スピノルを掛けて作る（分枝が厳密に決まる）。
+   * "naive" だけは実空間で ψ₁ にガウスを置く（分枝が混ざるのが意図した挙動）。
+   */
+  function setPacket(branch, x0, k0, sigma) {
+    const { re1, im1, re2, im2 } = state;
+
+    if (branch === "naive") {
+      for (let j = 0; j < N; j++) {
+        // 周期境界なので最短距離を使う
+        let d = grid.x[j] - x0;
+        d -= grid.L * Math.round(d / grid.L);
+        const g = Math.exp(-(d * d) / (2 * sigma * sigma));
+        re1[j] = g; im1[j] = 0; re2[j] = 0; im2[j] = 0;
+      }
+      normalize();
+      return;
+    }
+
+    // k 空間で組み立てる
+    const kr1 = new Float64Array(N), ki1 = new Float64Array(N);
+    const kr2 = new Float64Array(N), ki2 = new Float64Array(N);
+
+    for (let n = 0; n < N; n++) {
+      const k = grid.k[n];
+      const dk = k - k0;
+      const env = Math.exp(-(sigma * sigma * dk * dk) / 2);
+      if (env === 0) continue;
+
+      // e^(-i k x₀)
+      const ph = -k * x0;
+      const cr = Math.cos(ph) * env;
+      const ci = Math.sin(ph) * env;
+
+      const { up0, up1, um0, um1 } = branchSpinors(k, solver.m);
+      let s0, s1;
+      if (branch === "+") {
+        s0 = up0; s1 = up1;
+      } else if (branch === "-") {
+        s0 = um0; s1 = um1;
+      } else if (branch === "mix") {
+        const r2 = Math.SQRT1_2;
+        s0 = (up0 + um0) * r2; s1 = (up1 + um1) * r2;
+      } else {
+        throw new Error(`未知の branch: ${branch}`);
+      }
+
+      kr1[n] = cr * s0; ki1[n] = ci * s0;
+      kr2[n] = cr * s1; ki2[n] = ci * s1;
+    }
+
+    ifft(kr1, ki1);
+    ifft(kr2, ki2);
+
+    re1.set(kr1); im1.set(ki1);
+    re2.set(kr2); im2.set(ki2);
+    normalize();
+  }
+
+  /**
+   * 状態を指定した分枝へ射影する。各 k ごとに行うため厳密。
+   * @param {number} sign +1 で正分枝、-1 で負分枝
+   * @returns {number} 落ちた重みの割合（0〜1）
+   */
+  function projectToBranch(sign) {
+    const spec = spectrum(state, grid);
+    const w = branchWeights(spec, grid, solver.m);
+
+    let kept = 0, dropped = 0;
+    for (let n = 0; n < N; n++) {
+      kept += sign > 0 ? w.wPlus[n] : w.wMinus[n];
+      dropped += sign > 0 ? w.wMinus[n] : w.wPlus[n];
+    }
+    const total = kept + dropped;
+    const lostFraction = total > 1e-300 ? dropped / total : 0;
+
+    // 各 k で選んだ分枝の成分だけを残す
+    const kr1 = new Float64Array(N), ki1 = new Float64Array(N);
+    const kr2 = new Float64Array(N), ki2 = new Float64Array(N);
+    for (let n = 0; n < N; n++) {
+      const sp = branchSpinors(grid.k[n], solver.m);
+      const s0 = sign > 0 ? sp.up0 : sp.um0;
+      const s1 = sign > 0 ? sp.up1 : sp.um1;
+      // 係数 c = u·ψ̂（u は実ベクトル）
+      const cRe = s0 * spec.re1[n] + s1 * spec.re2[n];
+      const cIm = s0 * spec.im1[n] + s1 * spec.im2[n];
+      kr1[n] = cRe * s0; ki1[n] = cIm * s0;
+      kr2[n] = cRe * s1; ki2[n] = cIm * s1;
+    }
+
+    ifft(kr1, ki1);
+    ifft(kr2, ki2);
+
+    state.re1.set(kr1); state.im1.set(ki1);
+    state.re2.set(kr2); state.im2.set(ki2);
+    normalize();
+
+    return lostFraction;
   }
 
   return solver;

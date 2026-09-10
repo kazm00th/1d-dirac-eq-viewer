@@ -119,3 +119,97 @@ test("step: Strang 分割が 2 次収束する (Δt を半分にすると誤差�
   assert(ratio > 3.5 && ratio < 4.5,
     `収束比 ${ratio} が 4 から外れている (e1=${e1}, e2=${e2})`);
 });
+
+import { spectrum, branchWeights, measure } from "../src/observables.js";
+
+test("setPacket: 正分枝のみの波束は負分枝の重みを持たない", () => {
+  const g = makeGrid(512, 40);
+  const s = createSolver(g);
+  s.m = 1;
+  s.setPacket("+", 20, 2, 1.5);
+  const w = branchWeights(spectrum(s.state, g), g, s.m);
+  let wp = 0, wm = 0;
+  for (let n = 0; n < g.N; n++) { wp += w.wPlus[n]; wm += w.wMinus[n]; }
+  assert(wm / (wp + wm) < 1e-14, `負分枝の重み比 ${wm / (wp + wm)} が大きすぎる`);
+});
+
+test("setPacket: 負分枝のみの波束は運動量と逆向きの群速度を持つ", () => {
+  const g = makeGrid(512, 40);
+  const s = createSolver(g);
+  s.m = 1;
+  const k0 = 2, sigma = 1.5;
+  s.setPacket("-", 20, k0, sigma);
+  const o = measure(s.state, s.fields, s.m, g);
+
+  // 有限幅の波束の ⟨v⟩ は点値 -k0/E(k0) ではなく、運動量分布
+  //   |g(k)|² = exp[-σ²(k-k0)²]
+  // で重みづけた群速度 -k/E(k) の平均になる。v_g(k)=k/E は k>0 で上に凸なので、
+  // Jensen により |⟨v⟩| < |k0/E(k0)|（σ=1.5, k0=2, m=1 で約 1.4% 下）。
+  // 点値と比べるとこの有限幅効果ぶん必ずずれるため、正しい期待値である
+  // 「分布で重みづけた群速度平均」と比較する。これは solver が分枝構成と
+  // measure() の積分を厳密に再現していれば機械精度で一致する。
+  let num = 0, den = 0;
+  for (let n = 0; n < g.N; n++) {
+    const k = g.k[n];
+    const w = Math.exp(-(sigma * sigma) * (k - k0) * (k - k0));
+    num += w * (-k / Math.hypot(k, s.m));
+    den += w;
+  }
+  const expected = num / den;   // ≈ -0.8806
+
+  assertClose(o.vMean, expected, 1e-6, "⟨v⟩ が運動量分布で重みづけた群速度平均と一致しない");
+  assert(o.vMean < 0, "負分枝なのに ⟨v⟩ が正になっている");
+  assert(Math.abs(o.vMean) < k0 / Math.hypot(k0, s.m),
+    "有限幅の波束なら |⟨v⟩| < |k0/E(k0)| のはず（Jensen）");
+});
+
+test("setPacket: naive は分枝が混ざる", () => {
+  const g = makeGrid(512, 40);
+  const s = createSolver(g);
+  s.m = 1;
+  s.setPacket("naive", 20, 2, 1.5);
+  const w = branchWeights(spectrum(s.state, g), g, s.m);
+  let wp = 0, wm = 0;
+  for (let n = 0; n < g.N; n++) { wp += w.wPlus[n]; wm += w.wMinus[n]; }
+  const frac = wm / (wp + wm);
+  assert(frac > 1e-3, `naive なのに負分枝の重み比が ${frac} と小さすぎる`);
+});
+
+test("normalize: ノルムが 1 になる", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  for (let j = 0; j < g.N; j++) s.state.re1[j] = 3.7 * Math.exp(-((g.x[j] - 10) ** 2) / 5);
+  s.normalize();
+  assertClose(measure(s.state, s.fields, s.m, g).norm, 1, 1e-13, "ノルム");
+});
+
+// 検証項目 11
+test("projectToBranch: 射影は厳密（残留する反対分枝の重み比 < 1e-14）", () => {
+  const g = makeGrid(512, 40);
+  const s = createSolver(g);
+  s.m = 0.7;
+  // ランダムな凹凸を持つ状態（手描きの模擬）
+  let seed = 23;
+  const r = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+  for (let j = 0; j < g.N; j++) {
+    s.state.re1[j] = r();
+    s.state.im1[j] = r();
+    s.state.re2[j] = r();
+    s.state.im2[j] = r();
+  }
+  s.projectToBranch(+1);
+  const w = branchWeights(spectrum(s.state, g), g, s.m);
+  let wp = 0, wm = 0;
+  for (let n = 0; n < g.N; n++) { wp += w.wPlus[n]; wm += w.wMinus[n]; }
+  assert(wm / (wp + wm) < 1e-14, `残留した負分枝の重み比 ${wm / (wp + wm)}`);
+});
+
+test("projectToBranch: 落ちた重みの割合を返し、射影後は規格化されている", () => {
+  const g = makeGrid(512, 40);
+  const s = createSolver(g);
+  s.m = 1;
+  s.setPacket("mix", 20, 2, 1.5);   // 50:50 混合なので約半分が落ちるはず
+  const lost = s.projectToBranch(+1);
+  assert(lost > 0.4 && lost < 0.6, `落ちた重みの割合 ${lost} が 0.5 付近でない`);
+  assertClose(measure(s.state, s.fields, s.m, g).norm, 1, 1e-13, "射影後のノルム");
+});
