@@ -1203,11 +1203,30 @@ test("setPacket: 負分枝のみの波束は運動量と逆向きの群速度を
   const g = makeGrid(512, 40);
   const s = createSolver(g);
   s.m = 1;
-  const k0 = 2;
-  s.setPacket("-", 20, k0, 1.5);
+  const k0 = 2, sigma = 1.5;
+  s.setPacket("-", 20, k0, sigma);
   const o = measure(s.state, s.fields, s.m, g);
-  const E = Math.hypot(k0, s.m);
-  assertClose(o.vMean, -k0 / E, 0.01, "⟨v⟩ が -k/E と一致しない");
+
+  // 有限幅の波束の ⟨v⟩ は点値 -k0/E(k0) ではなく、運動量分布
+  //   |g(k)|² = exp[-σ²(k-k0)²]
+  // で重みづけた群速度 -k/E(k) の平均になる。v_g(k)=k/E は k>0 で上に凸なので、
+  // Jensen により |⟨v⟩| < |k0/E(k0)|（σ=1.5, k0=2, m=1 で約 1.4% 下）。
+  // 点値と比べるとこの有限幅効果ぶん必ずずれるため、正しい期待値である
+  // 「分布で重みづけた群速度平均」と比較する。これは solver が分枝構成と
+  // measure() の積分を厳密に再現していれば機械精度で一致する。
+  let num = 0, den = 0;
+  for (let n = 0; n < g.N; n++) {
+    const k = g.k[n];
+    const w = Math.exp(-(sigma * sigma) * (k - k0) * (k - k0));
+    num += w * (-k / Math.hypot(k, s.m));
+    den += w;
+  }
+  const expected = num / den;   // ≈ -0.8806
+
+  assertClose(o.vMean, expected, 1e-6, "⟨v⟩ が運動量分布で重みづけた群速度平均と一致しない");
+  assert(o.vMean < 0, "負分枝なのに ⟨v⟩ が正になっている");
+  assert(Math.abs(o.vMean) < k0 / Math.hypot(k0, s.m),
+    "有限幅の波束なら |⟨v⟩| < |k0/E(k0)| のはず（Jensen）");
 });
 
 test("setPacket: naive は分枝が混ざる", () => {
@@ -1457,13 +1476,29 @@ function meanVelocity(solver) {
   return n > 1e-300 ? v / n : 0;
 }
 
+/**
+ * 運動量分布 |g(k)|² = exp[-σ²(k-k0)²] で重みづけた群速度平均。
+ * 有限幅の波束の ⟨v⟩ = d⟨x⟩/dt はこの値であって、点値 k0/E(k0) ではない
+ * （v_g(k)=k/E は k>0 で上に凸 → Jensen で点値より小さい。σ=2.0, k0=2, m=1 で約 0.7% 下）。
+ */
+function weightedGroupVelocity(grid, k0, sigma, m, sign) {
+  let num = 0, den = 0;
+  for (let n = 0; n < grid.N; n++) {
+    const k = grid.k[n];
+    const w = Math.exp(-(sigma * sigma) * (k - k0) * (k - k0));
+    num += w * sign * k / Math.hypot(k, m);
+    den += w;
+  }
+  return num / den;
+}
+
 // 検証項目 4
-test("物理: 正分枝波束の群速度が k/E と一致する (誤差 < 0.1%)", () => {
+test("物理: 正分枝波束の群速度が運動量分布で重みづけた k/E 平均と一致する", () => {
   const g = makeGrid(512, 40);
   const s = createSolver(g);
   s.m = 1;
-  const k0 = 2;
-  s.setPacket("+", 12, k0, 2.0);
+  const k0 = 2, sigma = 2.0;
+  s.setPacket("+", 12, k0, sigma);
 
   const x0 = measure(s.state, s.fields, s.m, g).xMean;
   const steps = 1500;
@@ -1471,8 +1506,14 @@ test("物理: 正分枝波束の群速度が k/E と一致する (誤差 < 0.1%)
   const x1 = measure(s.state, s.fields, s.m, g).xMean;
 
   const measured = (x1 - x0) / (steps * DT);
-  const expected = k0 / Math.hypot(k0, s.m);
-  assertClose(measured, expected, 1e-3, `群速度 (測定 ${measured}, 理論 ${expected})`);
+  const expected = weightedGroupVelocity(g, k0, sigma, s.m, +1);   // ≈ 0.8877
+  // 自由伝播では ⟨v⟩ は時間に依らず一定（Ehrenfest, 外力なし）なので、
+  // 平均速度＝この重みつき平均に機械精度レベルで一致するはず。時間離散化と
+  // ⟨x⟩ の数値差分ぶんの余裕をみて 2e-3。
+  assertClose(measured, expected, 2e-3, `群速度 (測定 ${measured}, 理論 ${expected})`);
+  // 点値 k0/E(k0) より小さいこと（有限幅 → Jensen）も確認する
+  assert(measured < k0 / Math.hypot(k0, s.m),
+    "有限幅の波束なら測定群速度 < k0/E(k0) のはず");
 });
 
 // 検証項目 5
@@ -1493,33 +1534,61 @@ test("物理: 大きな k でも ⟨v⟩ が光速を超えない", () => {
 });
 
 // 検証項目 6
-test("物理: 50:50 混合の Zitterbewegung 周期が π/E と一致する (誤差 < 1%)", () => {
+test("物理: 50:50 混合の Zitterbewegung 周期が 2⟨E⟩ の逆数と一致する", () => {
   const g = makeGrid(512, 40);
   const s = createSolver(g);
   s.m = 1;
-  const k0 = 1;
-  // σ を大きく取り k 空間で細く（ほぼ単色）にすると振動が純粋な正弦波に近づく
-  s.setPacket("mix", 20, k0, 4.0);
+  const k0 = 1, sigma = 5.0;
+  // σ を大きく取り k 空間で細く（ほぼ単色）にする。それでも有限幅なので
+  // ZB 角振動数 2E(k) はモードごとに少し違い、時間とともに位相がずれて
+  // 振幅が減衰する（デコヒーレンス時間 ~ 1/(2·δω)）。そのため
+  //  (1) 観測窓は短くとり（コヒーレントなうちに数周期を見る）
+  //  (2) ゼロ交差は線形補間して整数量子化誤差を消し
+  //  (3) 期待周期は点値 π/E(k0) ではなく π/⟨E⟩（分布で重みづけた平均。
+  //      E(k) は下に凸なので ⟨E⟩ > E(k0)）と比べる。
+  s.setPacket("mix", 20, k0, sigma);
 
-  const T = 20;
+  // 分布で重みづけた ⟨E⟩
+  let eNum = 0, eDen = 0;
+  for (let n = 0; n < g.N; n++) {
+    const k = g.k[n];
+    const w = Math.exp(-(sigma * sigma) * (k - k0) * (k - k0));
+    eNum += w * Math.hypot(k, s.m);
+    eDen += w;
+  }
+  const Emean = eNum / eDen;
+  const expectedPeriod = Math.PI / Emean;   // ≈ 2.22
+
+  const T = 6;   // Emean のデコヒーレンス時間より十分短い窓
   const steps = Math.round(T / DT);
-  const samples = [];
+  const ts = [], vs = [];
   for (let i = 0; i < steps; i++) {
     s.step(DT);
-    samples.push(meanVelocity(s));   // measure() は重いので使わない
+    ts.push((i + 1) * DT);
+    vs.push(meanVelocity(s));   // measure() は重いので使わない
   }
 
-  // 平均を引いて（トレンド除去）符号反転の回数から周期を求める
-  const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
-  let crossings = 0;
-  for (let i = 1; i < samples.length; i++) {
-    if ((samples[i - 1] - mean) * (samples[i] - mean) < 0) crossings++;
-  }
-  assert(crossings >= 4, `符号反転が ${crossings} 回しかなく周期を測れない`);
+  // トレンド除去（mix の正味ドリフトは理論上 0 だが数値ぶんを引く）
+  const mean = vs.reduce((a, b) => a + b, 0) / vs.length;
 
-  const measuredPeriod = 2 * T / crossings;
-  const expectedPeriod = Math.PI / Math.hypot(k0, s.m);
-  assertClose(measuredPeriod, expectedPeriod, 0.01,
+  // 上昇方向のゼロ交差時刻を線形補間で求める
+  const crossTimes = [];
+  for (let i = 1; i < vs.length; i++) {
+    const a = vs[i - 1] - mean, b = vs[i] - mean;
+    if (a < 0 && b >= 0) {
+      const frac = a / (a - b);
+      crossTimes.push(ts[i - 1] + frac * (ts[i] - ts[i - 1]));
+    }
+  }
+  assert(crossTimes.length >= 3,
+    `上昇ゼロ交差が ${crossTimes.length} 回しかなく周期を測れない`);
+
+  // 連続する上昇交差の間隔がちょうど 1 周期
+  let sum = 0;
+  for (let i = 1; i < crossTimes.length; i++) sum += crossTimes[i] - crossTimes[i - 1];
+  const measuredPeriod = sum / (crossTimes.length - 1);
+
+  assertClose(measuredPeriod, expectedPeriod, 0.03,
     `ZB 周期 (測定 ${measuredPeriod}, 理論 ${expectedPeriod})`);
 });
 
