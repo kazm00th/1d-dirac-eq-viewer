@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>1+1次元ディラック方程式ビューア 検証スイート</title>
+<style>
+  body { font-family: monospace; padding: 20px; background: #f5f4f0; color: #2c2c2a; }
+  .ok { color: #0f6e56; }
+  .ng { color: #a5231a; margin: 6px 0; }
+  .msg { color: #5f5e5a; margin-left: 6em; }
+</style>
+</head>
+<body>
+<div id="out">実行中…</div>
+<script type="module">
+  import { runAll } from "./tests/harness.js";
+  import "./tests/fft.test.js";
+  runAll(document.getElementById("out"));
+</script>
+</body>
+</html>
