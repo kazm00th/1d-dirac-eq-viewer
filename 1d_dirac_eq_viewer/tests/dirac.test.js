@@ -213,3 +213,56 @@ test("projectToBranch: 落ちた重みの割合を返し、射影後は規格化
   assert(lost > 0.4 && lost < 0.6, `落ちた重みの割合 ${lost} が 0.5 付近でない`);
   assertClose(measure(s.state, s.fields, s.m, g).norm, 1, 1e-13, "射影後のノルム");
 });
+
+// 検証項目 12
+test("smooth: 平滑化しても総和（直流成分）が保存する", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  // 階段状のギザギザを V に入れる
+  for (let j = 0; j < g.N; j++) s.fields.V[j] = (j % 7 < 3) ? 1.5 : -0.5;
+  let before = 0;
+  for (let j = 0; j < g.N; j++) before += s.fields.V[j];
+  s.smooth("V");
+  let after = 0;
+  for (let j = 0; j < g.N; j++) after += s.fields.V[j];
+  assertClose(after, before, 1e-12, "総和");
+});
+
+test("smooth: 高周波成分が減る", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  for (let j = 0; j < g.N; j++) s.fields.V[j] = (j % 2 === 0) ? 1 : -1;  // Nyquist 振動
+  const before = Math.max(...s.fields.V);
+  s.smooth("V");
+  const after = Math.max(...s.fields.V.map(Math.abs));
+  assert(after < before * 0.5, `高周波が十分減っていない (${before} → ${after})`);
+});
+
+test("smooth: target='S' は V に影響しない", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  for (let j = 0; j < g.N; j++) {
+    s.fields.V[j] = (j % 2 === 0) ? 1 : -1;
+    s.fields.S[j] = (j % 2 === 0) ? 1 : -1;
+  }
+  const vBefore = s.fields.V.slice();
+  s.smooth("S");
+  for (let j = 0; j < g.N; j++) {
+    assertClose(s.fields.V[j], vBefore[j], 1e-15, `V[${j}] が変更された`);
+  }
+});
+
+test("smooth: target='psi' はノルムを増やさない", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  let seed = 31;
+  const r = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296 - 0.5; };
+  for (let j = 0; j < g.N; j++) {
+    s.state.re1[j] = r(); s.state.im1[j] = r();
+    s.state.re2[j] = r(); s.state.im2[j] = r();
+  }
+  const n0 = measure(s.state, s.fields, s.m, g).norm;
+  s.smooth("psi");
+  const n1 = measure(s.state, s.fields, s.m, g).norm;
+  assert(n1 <= n0 * (1 + 1e-12), `ノルムが増えた (${n0} → ${n1})`);
+});

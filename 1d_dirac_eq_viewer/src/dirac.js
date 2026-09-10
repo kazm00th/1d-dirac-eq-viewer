@@ -44,7 +44,56 @@ export function createSolver(grid) {
     setPacket,
     projectToBranch,
     normalize,
+    smooth,
   };
+
+  /** k 空間ガウシアン核。σ_s = 2h。k=0 で値 1 なので直流成分は保存される。 */
+  const smoothKernel = (() => {
+    const sig = 2 * grid.h;
+    const kern = new Float64Array(N);
+    for (let n = 0; n < N; n++) {
+      const k = grid.k[n];
+      kern[n] = Math.exp(-(sig * sig * k * k) / 2);
+    }
+    return kern;
+  })();
+
+  /** 実配列 1 本に核を掛ける（虚部はゼロとして扱う）。 */
+  function convolveReal(arr) {
+    const re = arr.slice();
+    const im = new Float64Array(N);
+    fft(re, im);
+    for (let n = 0; n < N; n++) { re[n] *= smoothKernel[n]; im[n] *= smoothKernel[n]; }
+    ifft(re, im);
+    arr.set(re);
+  }
+
+  /** 複素配列 1 組に核を掛ける。 */
+  function convolveComplex(reArr, imArr) {
+    const re = reArr.slice(), im = imArr.slice();
+    fft(re, im);
+    for (let n = 0; n < N; n++) { re[n] *= smoothKernel[n]; im[n] *= smoothKernel[n]; }
+    ifft(re, im);
+    reArr.set(re); imArr.set(im);
+  }
+
+  /**
+   * 選択中の対象を 1 パス平滑化する。
+   * @param {"V"|"S"|"psi"} target
+   */
+  function smooth(target) {
+    if (target === "V") {
+      convolveReal(fields.V);
+    } else if (target === "S") {
+      convolveReal(fields.S);
+    } else if (target === "psi") {
+      // 成分ごとに別の幅を掛けると分枝構造が歪むため、同じ核を全成分に適用する
+      convolveComplex(state.re1, state.im1);
+      convolveComplex(state.re2, state.im2);
+    } else {
+      throw new Error(`未知の target: ${target}`);
+    }
+  }
 
   /**
    * ポテンシャル・質量ステップ（実空間、厳密）。
