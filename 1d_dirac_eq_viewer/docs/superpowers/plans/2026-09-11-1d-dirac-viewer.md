@@ -1834,7 +1834,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: 既存の solver
 - Produces:
-  - `solver.absorbWidth`（number、既定 0）と `solver.absorbed`（number、累積吸収量）
+  - `solver.absorbWidth`（number、既定 0）
+  - `solver.absorbed`（number、累積吸収量の合計）、`solver.absorbedLeft` / `solver.absorbedRight`（左半分 `x < L/2` / 右半分でそれぞれ消えた分の累積。既定 0）
   - `solver.setField(which, shape, params)` — `which` は `"V"` / `"S"`、`shape` は `"none"` / `"step"` / `"barrier"` / `"well"`
   - `solver.step(dt)` が吸収マスクを適用するよう変更される
 
@@ -1850,7 +1851,11 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 `d` は左端 `x` と右端 `L - x` の小さい方。`W = 0` のときはマスクを一切適用しない
 （そのとき時間発展は完全にユニタリになり、検証項目 2 が成り立つ）。
 
-吸収した確率量は `solver.absorbed` に累積する。マスク適用前後のノルムの差を足していく。
+吸収した確率量は、マスク適用前後のノルムの差を足していく。**左半分（`x < L/2`）で
+消えた分は `solver.absorbedLeft`、右半分は `solver.absorbedRight`、合計は `solver.absorbed`**。
+左右を分けておくと、波束を段差に当てて両端の吸収層に完全に吸わせたあと、
+`absorbedRight` がそのまま透過確率、`absorbedLeft` が反射確率になる（`T + R ≈ 1`）。
+既存の `absorbed` は合計なので、`absorbed` だけを見る吸収層テストは変更不要。
 
 外場の形状（`L = 40` を前提に、中央 `x = 20` を境界とする）:
 
@@ -1905,48 +1910,60 @@ test("setField: step 形状が正しく設定される", () => {
 ```js
 import { test, assert } from "./harness.js";
 import { makeGrid, createSolver } from "../src/dirac.js";
-import { density } from "../src/observables.js";
-
-/** 段差より右側にある確率を返す。 */
-function rightProbability(solver, xStep) {
-  const rho = density(solver.state);
-  let sum = 0;
-  for (let j = 0; j < solver.grid.N; j++) {
-    if (solver.grid.x[j] >= xStep) sum += rho[j];
-  }
-  return sum * solver.grid.h;
-}
+import { measure } from "../src/observables.js";
 
 /**
- * 同一の初期条件・同一の段差高さで V 段差と S 段差を走らせ、
- * 段差より右へ抜けた確率を返す。
+ * 段差に正分枝波束を当て、波束が両端の吸収層に完全に吸われるまで回して
+ * 透過 T = absorbedRight、反射 R = absorbedLeft を返す。
+ *
+ * 「段差より右の確率」を途中時刻で測る方法は、反射波の裾やエバネッセント skin
+ * を透過と誤って拾ってしまい曖昧になる。完全に吸わせてから左右の吸収量を読めば
+ * T + R ≈ 1 が厳密に成り立ち、T が透過確率そのものになる。
+ *
+ * パラメータ: m=0.5, k0=2 ⇒ E = √(4.25) ≈ 2.062。
+ *   V 段差 height=4: V₀ = 4 > E + m ≈ 2.56 → Klein 透過が残る。
+ *   S 段差 height=4: 実効質量 0.5 + 4 = 4.5 > E → 全反射（エバネッセント）。
+ * k0 を 2 に上げて群速度（≈ 0.97）を稼ぎ、内部が空になるまでのステップ数を抑える。
  */
-function runStep(which, height) {
+function transmission(which, height) {
   const g = makeGrid(512, 40);
   const s = createSolver(g);
   s.m = 0.5;
   s.absorbWidth = 5;
-  s.setPacket("+", 10, 1, 2.0);      // E = √(1 + 0.25) ≈ 1.118
+  s.setPacket("+", 12, 2, 2.0);   // 左裾 x0-3σ = 6 > 吸収層端 x=5、クリップされない
   s.setField(which, "step", { height });
-  for (let i = 0; i < 7000; i++) s.step(0.002);
-  return rightProbability(s, 20);
+
+  // 内部がほぼ空になるまで（最大 20000 ステップ = t40）回す。500 ステップごとに確認。
+  let norm = 1;
+  for (let i = 0; i < 20000; i++) {
+    s.step(0.002);
+    if (i % 500 === 499) {
+      norm = measure(s.state, s.fields, s.m, g).norm;
+      if (norm < 1e-4) break;
+    }
+  }
+  norm = measure(s.state, s.fields, s.m, g).norm;
+  assert(norm < 2e-3, `内部に ${norm} 残っており透過を確定できない（ステップ数不足）`);
+  return { T: s.absorbedRight, R: s.absorbedLeft };
 }
 
 // 検証項目 8
 test("Klein: V 段差 (V₀ > E + m) では有意な透過が残る", () => {
-  const t = runStep("V", 3);        // E + m ≈ 1.618 < 3
-  assert(t > 0.1, `透過確率が ${t} と小さすぎる（Klein パラドックスが出ていない）`);
+  const { T, R } = transmission("V", 4);
+  assert(T > 0.1, `透過 T=${T} が小さすぎる（Klein パラドックスが出ていない）`);
+  assert(Math.abs(T + R - 1) < 0.02, `T+R=${T + R} が 1 から外れている（吸収の取りこぼし）`);
 });
 
 test("Klein: 同じ高さの S 段差では透過がほぼ消える", () => {
-  const t = runStep("S", 3);        // 実効質量 0.5 + 3 = 3.5 > E ≈ 1.118 → エバネッセント
-  assert(t < 1e-3, `透過確率が ${t} と大きすぎる（スカラー段差は反射するはず）`);
+  const { T, R } = transmission("S", 4);
+  assert(T < 5e-3, `透過 T=${T} が大きすぎる（スカラー段差は全反射のはず）`);
+  assert(R > 0.99, `反射 R=${R} が小さすぎる`);
 });
 
-test("Klein: V 段差と S 段差の透過率の比が 100 倍以上ある", () => {
-  const tV = runStep("V", 3);
-  const tS = runStep("S", 3);
-  assert(tV / tS > 100, `比が ${tV / tS} しかない（静電とスカラーの対比が出ていない）`);
+test("Klein: V 段差と S 段差の透過率の比が 50 倍以上ある", () => {
+  const tV = transmission("V", 4).T;
+  const tS = transmission("S", 4).T;
+  assert(tV / tS > 50, `比が ${tV / tS} しかない（静電とスカラーの対比が出ていない）`);
 });
 ```
 
@@ -1983,20 +2000,30 @@ Expected: `setField` が未定義でエラー。
     return mask;
   }
 
-  /** 吸収マスクを適用し、減ったノルムを solver.absorbed に積算する。 */
+  /**
+   * 吸収マスクを適用し、減ったノルムを積算する。
+   * 左半分（x < L/2）で消えた分は solver.absorbedLeft、右半分は solver.absorbedRight、
+   * 合計は solver.absorbed に入れる。左右を分けておくと、波束が両端の吸収層に
+   * 完全に吸われたあと「右へ抜けた確率＝透過」「左へ戻った確率＝反射」を
+   * 曖昧さなく読める（Klein の検証で使う）。
+   */
   function applyAbsorber() {
     const mask = getMask(solver.absorbWidth);
     if (!mask) return;
     const { re1, im1, re2, im2 } = state;
-    let lost = 0;
+    const mid = grid.L / 2;
+    let lostL = 0, lostR = 0;
     for (let j = 0; j < N; j++) {
       const before = re1[j] ** 2 + im1[j] ** 2 + re2[j] ** 2 + im2[j] ** 2;
       const g = mask[j];
       re1[j] *= g; im1[j] *= g; re2[j] *= g; im2[j] *= g;
       const after = re1[j] ** 2 + im1[j] ** 2 + re2[j] ** 2 + im2[j] ** 2;
-      lost += before - after;
+      if (grid.x[j] < mid) lostL += before - after;
+      else lostR += before - after;
     }
-    solver.absorbed += lost * grid.h;
+    solver.absorbedLeft += lostL * grid.h;
+    solver.absorbedRight += lostR * grid.h;
+    solver.absorbed += (lostL + lostR) * grid.h;
   }
 
   /**
@@ -2048,14 +2075,18 @@ Expected: `setField` が未定義でエラー。
 ```js
     absorbWidth: 0,
     absorbed: 0,
+    absorbedLeft: 0,
+    absorbedRight: 0,
     setField,
 ```
 
 - [ ] **Step 4: テストが通ることを確認する**
 
-Expected: 「41 件成功 / 0 件失敗」
+Expected: 「41 件成功 / 0 件失敗」（35 + `dirac.test.js` に 3 + `klein.test.js` に 3）
 
-Klein のテストは重い（7000 ステップ × N=512 を 5 回）。数秒かかるのは正常。
+Klein のテストは重い（各 transmission() が最大 20000 ステップ × N=512、`transmission()` を計 4 回呼ぶ）。
+スイート全体で 1〜3 分かかることがある。ステップ数を減らして速くしてはならない
+（内部が空になる前に測ると `T + R ≈ 1` が壊れる）。S 段差は早く空になるので早期 break で短く済む。
 
 - [ ] **Step 5: コミット**
 
