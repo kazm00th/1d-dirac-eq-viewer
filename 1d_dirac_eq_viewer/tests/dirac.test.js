@@ -266,3 +266,36 @@ test("smooth: target='psi' はノルムを増やさない", () => {
   const n1 = measure(s.state, s.fields, s.m, g).norm;
   assert(n1 <= n0 * (1 + 1e-12), `ノルムが増えた (${n0} → ${n1})`);
 });
+
+test("吸収層: W=0 ではマスクが適用されずノルムが保存する", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  s.m = 1;
+  s.setPacket("+", 20, 2, 1.5);
+  s.absorbWidth = 0;
+  const n0 = measure(s.state, s.fields, s.m, g).norm;
+  for (let i = 0; i < 1000; i++) s.step(0.002);
+  assertClose(measure(s.state, s.fields, s.m, g).norm, n0, 1e-12, "ノルム");
+  assertClose(s.absorbed, 0, 1e-15, "吸収量");
+});
+
+test("吸収層: W>0 で端に達した波が吸収され absorbed に積算される", () => {
+  const g = makeGrid(512, 40);
+  const s = createSolver(g);
+  s.m = 1;
+  s.setPacket("+", 30, 5, 1.5);   // 右端へ向かう
+  s.absorbWidth = 6;
+  for (let i = 0; i < 6000; i++) s.step(0.002);
+  const n1 = measure(s.state, s.fields, s.m, g).norm;
+  assert(n1 < 0.5, `ノルムが ${n1} までしか減っていない（吸収されていない）`);
+  assertClose(s.absorbed + n1, 1, 1e-6, "吸収量とノルムの和");
+});
+
+test("setField: step 形状が正しく設定される", () => {
+  const g = makeGrid(128, 40);
+  const s = createSolver(g);
+  s.setField("V", "step", { height: 3 });
+  assertClose(s.fields.V[0], 0, 1e-15, "左端");
+  assertClose(s.fields.V[g.N - 1], 3, 1e-15, "右端");
+  assertClose(s.fields.S[g.N - 1], 0, 1e-15, "S は触らない");
+});

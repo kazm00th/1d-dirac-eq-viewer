@@ -40,6 +40,11 @@ export function createSolver(grid) {
     fields,
     m: 1,
     t: 0,
+    absorbWidth: 0,
+    absorbed: 0,
+    absorbedLeft: 0,
+    absorbedRight: 0,
+    setField,
     step,
     setPacket,
     projectToBranch,
@@ -161,11 +166,91 @@ export function createSolver(grid) {
     ifft(re2, im2);
   }
 
+  let maskCache = null;
+  let maskCacheWidth = -1;
+
+  /** 幅 W の cos² テーパーによる吸収マスク。W=0 なら null を返す。 */
+  function getMask(W) {
+    if (W <= 0) return null;
+    if (maskCacheWidth === W) return maskCache;
+    const mask = new Float64Array(N);
+    for (let j = 0; j < N; j++) {
+      const d = Math.min(grid.x[j], grid.L - grid.x[j]);
+      if (d >= W) {
+        mask[j] = 1;
+      } else {
+        const c = Math.cos((Math.PI / 2) * (W - d) / W);
+        mask[j] = c * c;
+      }
+    }
+    maskCache = mask;
+    maskCacheWidth = W;
+    return mask;
+  }
+
+  /**
+   * 吸収マスクを適用し、減ったノルムを積算する。
+   * 左半分（x < L/2）で消えた分は solver.absorbedLeft、右半分は solver.absorbedRight、
+   * 合計は solver.absorbed に入れる。左右を分けておくと、波束が両端の吸収層に
+   * 完全に吸われたあと「右へ抜けた確率＝透過」「左へ戻った確率＝反射」を
+   * 曖昧さなく読める（Klein の検証で使う）。
+   */
+  function applyAbsorber() {
+    const mask = getMask(solver.absorbWidth);
+    if (!mask) return;
+    const { re1, im1, re2, im2 } = state;
+    const mid = grid.L / 2;
+    let lostL = 0, lostR = 0;
+    for (let j = 0; j < N; j++) {
+      const before = re1[j] ** 2 + im1[j] ** 2 + re2[j] ** 2 + im2[j] ** 2;
+      const g = mask[j];
+      re1[j] *= g; im1[j] *= g; re2[j] *= g; im2[j] *= g;
+      const after = re1[j] ** 2 + im1[j] ** 2 + re2[j] ** 2 + im2[j] ** 2;
+      if (grid.x[j] < mid) lostL += before - after;
+      else lostR += before - after;
+    }
+    solver.absorbedLeft += lostL * grid.h;
+    solver.absorbedRight += lostR * grid.h;
+    solver.absorbed += (lostL + lostR) * grid.h;
+  }
+
+  /**
+   * 外場を形状プリセットで設定する。指定した側だけを書き換える。
+   * @param {"V"|"S"} which
+   * @param {"none"|"step"|"barrier"|"well"} shape
+   * @param {{height?:number, width?:number}} params
+   */
+  function setField(which, shape, params) {
+    const arr = which === "V" ? fields.V : which === "S" ? fields.S : null;
+    if (!arr) throw new Error(`未知の場: ${which}`);
+    const height = params && params.height !== undefined ? params.height : 3;
+    const width = params && params.width !== undefined ? params.width : 4;
+    const xc = grid.L / 2;
+
+    for (let j = 0; j < N; j++) {
+      const x = grid.x[j];
+      let v = 0;
+      if (shape === "none") {
+        v = 0;
+      } else if (shape === "step") {
+        v = x >= xc ? height : 0;
+      } else if (shape === "barrier") {
+        v = (x >= xc && x < xc + width) ? height : 0;
+      } else if (shape === "well") {
+        v = (x >= xc - width / 2 && x < xc + width / 2) ? -height : 0;
+      } else {
+        throw new Error(`未知の形状: ${shape}`);
+      }
+      arr[j] = v;
+    }
+  }
+
   /** Strang 分割で 1 副ステップ進める。 */
   function step(dt) {
     potentialStep(dt / 2);
     kineticStep(dt);
     potentialStep(dt / 2);
+    applyAbsorber();
     solver.t += dt;
   }
 
