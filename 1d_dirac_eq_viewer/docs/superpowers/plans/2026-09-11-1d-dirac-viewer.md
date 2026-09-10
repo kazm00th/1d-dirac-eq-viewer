@@ -1933,9 +1933,11 @@ function transmission(which, height) {
   s.setPacket("+", 12, 2, 2.0);   // 左裾 x0-3σ = 6 > 吸収層端 x=5、クリップされない
   s.setField(which, "step", { height });
 
-  // 内部がほぼ空になるまで（最大 20000 ステップ = t40）回す。500 ステップごとに確認。
+  // 内部がほぼ空になるまで（最大 32000 ステップ = t64）回す。500 ステップごとに確認。
+  // 注: cos² 吸収層は端で ~1.7% back-reflect し、その分は 2 周目（~t60）で吸われる。
+  //     t40 では内部にまだ ~1.5% 残るので t64 まで見る必要がある。
   let norm = 1;
-  for (let i = 0; i < 20000; i++) {
+  for (let i = 0; i < 32000; i++) {
     s.step(0.002);
     if (i % 500 === 499) {
       norm = measure(s.state, s.fields, s.m, g).norm;
@@ -2084,9 +2086,10 @@ Expected: `setField` が未定義でエラー。
 
 Expected: 「41 件成功 / 0 件失敗」（35 + `dirac.test.js` に 3 + `klein.test.js` に 3）
 
-Klein のテストは重い（各 transmission() が最大 20000 ステップ × N=512、`transmission()` を計 4 回呼ぶ）。
-スイート全体で 1〜3 分かかることがある。ステップ数を減らして速くしてはならない
-（内部が空になる前に測ると `T + R ≈ 1` が壊れる）。S 段差は早く空になるので早期 break で短く済む。
+Klein のテストは重い（各 transmission() が最大 32000 ステップ × N=512、`transmission()` を計 4 回呼ぶ）。
+スイート全体で 2〜4 分かかることがある。ステップ数を減らして速くしてはならない
+（内部が空になる前に測ると `T + R ≈ 1` が壊れる。cos² 吸収層の back-reflection が
+2 周目で吸われる t60 付近まで見ないと内部に ~1.5% 残る）。S 段差は早く空になるので早期 break で短く済む。
 
 - [ ] **Step 5: コミット**
 
