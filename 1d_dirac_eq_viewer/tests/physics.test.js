@@ -74,7 +74,7 @@ test("物理: 大きな k でも ⟨v⟩ が光速を超えない", () => {
 });
 
 // 検証項目 6
-test("物理: 50:50 混合の Zitterbewegung 周期が 2⟨E⟩ の逆数と一致する", () => {
+test("物理: 50:50 混合の Zitterbewegung 周期が π/⟨E⟩ と一致する", () => {
   const g = makeGrid(512, 40);
   const s = createSolver(g);
   s.m = 1;

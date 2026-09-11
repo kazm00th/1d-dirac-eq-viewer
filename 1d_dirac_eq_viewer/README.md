@@ -12,7 +12,7 @@ ES モジュールを使っているため `file://` では動かない（CORS �
     python -m http.server 8123
 
 ブラウザで `http://localhost:8123/index.html` を開く。
-検証スイートは `http://localhost:8123/tests.html`。
+検証スイートは `http://localhost:8123/tests.html`。Klein トンネリングの検証が重く、実行に 2〜4 分かかる。その間タブが応答なしに見えることがあるが、フリーズではなく正常な動作。
 
 ## 対象方程式
 

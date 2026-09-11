@@ -94,8 +94,14 @@ function onFieldPreset(which, shape) {
   if (shape === "none") {
     solver.setField("V", "none", {});
     solver.setField("S", "none", {});
+  } else if (shape === "well") {
+    // スカラー井戸は 0 < |S| < 2m でないと束縛状態にならず質量ギャップが
+    // 反転してしまう。既定の質量 m=1 スライダーに合わせて 1.5 に抑える。
+    solver.setField(which, shape, { height: 1.5, width: 4 });
   } else {
-    solver.setField(which, shape, { height: 3, width: 4 });
+    // 階段/障壁 V の Klein 透過には V₀ > E+m が要る。既定スライダー
+    // (m=1, k0=2 → E+m ≈ 3.24) で確実に超えるよう 5 にする。
+    solver.setField(which, shape, { height: 5, width: 4 });
   }
 }
 
@@ -180,8 +186,9 @@ function frame(now) {
   momentumRenderer.draw({
     grid, m: solver.m, wPlus: w.wPlus, wMinus: w.wMinus,
     // ナイキスト全域 (π/h ≈ 40) だと質量ギャップ 2m も dE/dk→±1 の飽和も
-    // 縮んで見えない。物理が見える範囲に絞る（波束の k₀ 最大 20 の半分程度）。
-    kMax: MOMENTUM_KMAX,
+    // 縮んで見えない。物理が見える範囲に絞る（波束の k₀ 最大 20 の半分程度）が、
+    // k₀ スライダーをそれ以上に振ったときは帯がパネル外に消えないよう追従させる。
+    kMax: Math.max(MOMENTUM_KMAX, Math.abs(s.k0) * 1.4),
   });
 
   requestAnimationFrame(frame);
