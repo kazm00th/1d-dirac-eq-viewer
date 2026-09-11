@@ -1,6 +1,8 @@
 // Canvas 2D への描画。物理を知らず、渡された数値をそのまま描く。
 
-export const REAL_MARGIN = { left: 40, right: 14, top: 14, bottom: 26 };
+// left/bottom を広げたのは、目盛り数値に加えて軸タイトル（横軸・縦軸のラベル）を
+// 収めるため。ui.js はこの定数を import して使うので、ここを変えれば両方に反映される。
+export const REAL_MARGIN = { left: 52, right: 14, top: 14, bottom: 38 };
 
 function cssVar(name) {
   return getComputedStyle(document.body).getPropertyValue(name).trim();
@@ -43,11 +45,20 @@ export function createRealRenderer(canvas) {
     ctx.textAlign = "center";
     for (let i = 0; i <= 4; i++) {
       const x = (grid.L * i) / 4;
-      ctx.fillText(x.toFixed(0), xToPx(x), CH - 8);
+      ctx.fillText(x.toFixed(0), xToPx(x), CH - REAL_MARGIN.bottom + 12);
     }
     ctx.textAlign = "right";
-    ctx.fillText(yscale.toFixed(2), REAL_MARGIN.left - 4, yToPx(yscale) + 4);
-    ctx.fillText((-yscale).toFixed(2), REAL_MARGIN.left - 4, yToPx(-yscale) + 4);
+    ctx.fillText(yscale.toFixed(2), REAL_MARGIN.left - 8, yToPx(yscale) + 4);
+    ctx.fillText((-yscale).toFixed(2), REAL_MARGIN.left - 8, yToPx(-yscale) + 4);
+
+    // 軸タイトル（横軸・縦軸のラベル）
+    ctx.textAlign = "center";
+    ctx.fillText("位置 x [ƛ_C]", REAL_MARGIN.left + plotW / 2, CH - 6);
+    ctx.save();
+    ctx.translate(12, REAL_MARGIN.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("値（自然単位, ħ=c=1）", 0, 0);
+    ctx.restore();
 
     function curve(values, color, dash) {
       ctx.save();
@@ -117,10 +128,19 @@ export function createMomentumRenderer(canvas) {
     ctx.fillStyle = cssVar("--text-muted");
     ctx.font = "11px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(`k = ${(-kMax).toFixed(0)}`, kToPx(-kMax) + 22, CH - 8);
-    ctx.fillText(`k = ${kMax.toFixed(0)}`, kToPx(kMax) - 22, CH - 8);
+    ctx.fillText(`k = ${(-kMax).toFixed(0)}`, kToPx(-kMax) + 22, CH - REAL_MARGIN.bottom + 12);
+    ctx.fillText(`k = ${kMax.toFixed(0)}`, kToPx(kMax) - 22, CH - REAL_MARGIN.bottom + 12);
     ctx.textAlign = "right";
-    ctx.fillText(`E = ${eMax.toFixed(1)}`, REAL_MARGIN.left - 4, eToPx(eMax) + 10);
+    ctx.fillText(`E = ${eMax.toFixed(1)}`, REAL_MARGIN.left - 8, eToPx(eMax) + 10);
+
+    // 軸タイトル（横軸・縦軸のラベル）
+    ctx.textAlign = "center";
+    ctx.fillText("波数 k [1/ƛ_C]", REAL_MARGIN.left + plotW / 2, CH - 6);
+    ctx.save();
+    ctx.translate(12, REAL_MARGIN.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("エネルギー E [1/ƛ_C]", 0, 0);
+    ctx.restore();
 
     // 光速の漸近線 E = ±k（点線）
     ctx.save();
