@@ -2647,6 +2647,9 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ```js
 // DOM イベントを意味のある操作に変換する層。物理も描画も知らない。
+// 座標マッピングに使うプロットのマージンは render.js が唯一の定義元
+// （REAL_MARGIN）。ここで再定義せず import して、レンダラと必ず一致させる。
+import { REAL_MARGIN } from "./render.js";
 
 export function bindUI(handlers) {
   const $ = (id) => document.getElementById(id);
@@ -2738,18 +2741,16 @@ export function bindUI(handlers) {
   $("btnFldSWell").addEventListener("click", () => handlers.onFieldPreset("S", "well"));
 
   // --- キャンバスのドラッグ描画 ---
-  // 描画座標系はレンダラの MARGIN と一致させる必要がある。
-  const MARGIN = { left: 40, right: 14, top: 14, bottom: 26 };
-
+  // 座標系はレンダラ (createRealRenderer) と同じ REAL_MARGIN を使う。
   function canvasPoint(evt) {
     const rect = els.plot.getBoundingClientRect();
     const cx = (evt.clientX - rect.left) * (els.plot.width / rect.width);
     const cy = (evt.clientY - rect.top) * (els.plot.height / rect.height);
-    const plotW = els.plot.width - MARGIN.left - MARGIN.right;
-    const plotH = els.plot.height - MARGIN.top - MARGIN.bottom;
-    const fx = Math.min(1, Math.max(0, (cx - MARGIN.left) / plotW));
+    const plotW = els.plot.width - REAL_MARGIN.left - REAL_MARGIN.right;
+    const plotH = els.plot.height - REAL_MARGIN.top - REAL_MARGIN.bottom;
+    const fx = Math.min(1, Math.max(0, (cx - REAL_MARGIN.left) / plotW));
     const yscale = parseFloat($("yscale").value);
-    const y = -((cy - MARGIN.top - plotH / 2) / (plotH / 2)) * yscale;
+    const y = -((cy - REAL_MARGIN.top - plotH / 2) / (plotH / 2)) * yscale;
     return { fx, y };
   }
 
@@ -2824,6 +2825,8 @@ const N = 512;
 const L = 40;
 const DT = 0.002;
 const MAX_STEPS_PER_FRAME = 400;
+const MOMENTUM_KMAX = 8;   // 運動量パネルの k 表示範囲。波束の k₀ スライダ上限は 20 だが、
+                          // 全域を映すと質量ギャップと群速度の飽和が潰れるので絞る。
 
 const grid = makeGrid(N, L);
 const solver = createSolver(grid);
@@ -2994,7 +2997,9 @@ function frame(now) {
   const w = branchWeights(spec, grid, solver.m);
   momentumRenderer.draw({
     grid, m: solver.m, wPlus: w.wPlus, wMinus: w.wMinus,
-    kMax: Math.PI / grid.h / 2,
+    // ナイキスト全域 (π/h ≈ 40) だと質量ギャップ 2m も dE/dk→±1 の飽和も
+    // 縮んで見えない。物理が見える範囲に絞る（波束の k₀ 最大 20 の半分程度）。
+    kMax: MOMENTUM_KMAX,
   });
 
   requestAnimationFrame(frame);
