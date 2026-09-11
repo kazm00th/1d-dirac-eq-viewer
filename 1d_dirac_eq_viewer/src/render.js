@@ -88,3 +88,100 @@ export function createRealRenderer(canvas) {
 
   return { draw };
 }
+
+export function createMomentumRenderer(canvas) {
+  const ctx = canvas.getContext("2d");
+
+  function draw(opts) {
+    const { grid, m, wPlus, wMinus, kMax } = opts;
+    const CW = canvas.width, CH = canvas.height;
+    const plotW = CW - REAL_MARGIN.left - REAL_MARGIN.right;
+    const plotH = CH - REAL_MARGIN.top - REAL_MARGIN.bottom;
+
+    const eMax = Math.hypot(kMax, m) * 1.1;
+    const kToPx = (k) => REAL_MARGIN.left + ((k + kMax) / (2 * kMax)) * plotW;
+    const eToPx = (E) => REAL_MARGIN.top + plotH / 2 - (E / eMax) * (plotH / 2);
+
+    ctx.clearRect(0, 0, CW, CH);
+
+    // 軸
+    ctx.strokeStyle = cssVar("--border");
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(REAL_MARGIN.left, eToPx(0));
+    ctx.lineTo(CW - REAL_MARGIN.right, eToPx(0));
+    ctx.moveTo(kToPx(0), REAL_MARGIN.top);
+    ctx.lineTo(kToPx(0), CH - REAL_MARGIN.bottom);
+    ctx.stroke();
+
+    ctx.fillStyle = cssVar("--text-muted");
+    ctx.font = "11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(`k = ${(-kMax).toFixed(0)}`, kToPx(-kMax) + 22, CH - 8);
+    ctx.fillText(`k = ${kMax.toFixed(0)}`, kToPx(kMax) - 22, CH - 8);
+    ctx.textAlign = "right";
+    ctx.fillText(`E = ${eMax.toFixed(1)}`, REAL_MARGIN.left - 4, eToPx(eMax) + 10);
+
+    // 光速の漸近線 E = ±k（点線）
+    ctx.save();
+    ctx.strokeStyle = cssVar("--text-muted");
+    ctx.setLineDash([3, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(kToPx(-kMax), eToPx(-kMax));
+    ctx.lineTo(kToPx(kMax), eToPx(kMax));
+    ctx.moveTo(kToPx(-kMax), eToPx(kMax));
+    ctx.lineTo(kToPx(kMax), eToPx(-kMax));
+    ctx.stroke();
+    ctx.restore();
+
+    // 分散関係の曲線（k 昇順に並べ直して描く。grid.k は FFT 順なので）
+    const order = Array.from({ length: grid.N }, (_, n) => n)
+      .sort((a, b) => grid.k[a] - grid.k[b]);
+
+    let wMax = 0;
+    for (let n = 0; n < grid.N; n++) {
+      wMax = Math.max(wMax, wPlus[n], wMinus[n]);
+    }
+
+    for (const sign of [+1, -1]) {
+      const w = sign > 0 ? wPlus : wMinus;
+      const color = cssVar(sign > 0 ? "--branch-plus" : "--branch-minus");
+
+      // 細い基準線（重みが 0 でも分散関係は見えるようにする）
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < order.length; i++) {
+        const k = grid.k[order[i]];
+        const px = kToPx(k), py = eToPx(sign * Math.hypot(k, m));
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // 重みを線幅として区間ごとに描く
+      if (wMax > 0) {
+        for (let i = 0; i + 1 < order.length; i++) {
+          const n0 = order[i], n1 = order[i + 1];
+          const ww = (w[n0] + w[n1]) / 2 / wMax;
+          if (ww < 1e-4) continue;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1 + 8 * ww;
+          ctx.beginPath();
+          ctx.moveTo(kToPx(grid.k[n0]), eToPx(sign * Math.hypot(grid.k[n0], m)));
+          ctx.lineTo(kToPx(grid.k[n1]), eToPx(sign * Math.hypot(grid.k[n1], m)));
+          ctx.stroke();
+        }
+      }
+    }
+
+    // 質量ギャップの表示
+    ctx.fillStyle = cssVar("--text-muted");
+    ctx.textAlign = "left";
+    ctx.fillText(`質量ギャップ 2m = ${(2 * m).toFixed(2)}`, REAL_MARGIN.left + 6, REAL_MARGIN.top + 12);
+  }
+
+  return { draw };
+}
