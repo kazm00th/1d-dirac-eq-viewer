@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>1+1次元ディラック方程式 リアルタイム可視化</title>
+<style>
+  :root {
+    --bg: #f5f4f0; --surface: #ffffff; --surface-2: #f1efe8;
+    --border: #d3d1c7; --text: #2c2c2a; --text-muted: #5f5e5a;
+    --rho: #0f6e56; --psi1: #185fa5; --psi2: #993c1d;
+    --psi1-alt: #6fa3d8; --psi2-alt: #cc8060;
+    --current: #3c3489; --pot-v: #5f5e5a; --pot-s: #8a6d1f;
+    --branch-plus: #185fa5; --branch-minus: #993c1d;
+    --absorb-bg: rgba(0,0,0,0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1c1c1a; --surface: #262624; --surface-2: #2c2c2a;
+      --border: #444441; --text: #ece9e2; --text-muted: #b4b2a9;
+      --rho: #5dcaa5; --psi1: #85b7eb; --psi2: #f0997b;
+      --psi1-alt: #4d7fae; --psi2-alt: #b06f52;
+      --current: #afa9ec; --pot-v: #b4b2a9; --pot-s: #d8bb60;
+      --branch-plus: #85b7eb; --branch-minus: #f0997b;
+      --absorb-bg: rgba(255,255,255,0.07);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic", sans-serif; }
+  h1 { font-size: 18px; font-weight: 500; margin: 0 0 4px; }
+  p.sub { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; }
+  .panel { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+  .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .checks { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chk { display: flex; align-items: center; gap: 5px; font-size: 13px;
+    border: 0.5px solid var(--border); border-radius: 6px; padding: 5px 10px;
+    background: var(--surface); user-select: none; }
+  .stats { display: flex; gap: 6px; flex-wrap: wrap; }
+  .stat { background: var(--surface-2); border-radius: 6px; padding: 5px 10px;
+    text-align: right; min-width: 84px; }
+  .stat .label { font-size: 10px; color: var(--text-muted); }
+  .stat .value { font-size: 13px; font-weight: 600; }
+  .plotwrap { display: flex; gap: 8px; background: var(--surface);
+    border: 0.5px solid var(--border); border-radius: 8px; padding: 10px; }
+  .yslider-col { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 4px; }
+  .yslider-col label { font-size: 11px; color: var(--text-muted); writing-mode: vertical-rl; }
+  .yslider-col input[type=range] { writing-mode: vertical-lr; direction: rtl; width: 18px; height: 220px; }
+  canvas { width: 100%; background: var(--surface-2); border-radius: 6px; touch-action: none; }
+  #plot { height: 320px; cursor: crosshair; }
+  #kplot { height: 260px; }
+  .sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .slider-block .row2 { display: flex; justify-content: space-between; font-size: 12px;
+    color: var(--text-muted); margin-bottom: 2px; }
+  .slider-block input[type=range] { width: 100%; }
+  .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { flex: 1; min-width: 110px; padding: 8px 10px; font-size: 13px;
+    border: 0.5px solid var(--border); border-radius: 6px;
+    background: var(--surface); color: var(--text); cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--surface-2); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .hint { font-size: 12px; color: var(--text-muted); margin: -4px 0 0; }
+  .group-label { font-size: 11px; color: var(--text-muted); margin-right: 4px; align-self: center; }
+</style>
+</head>
+<body>
+<div class="panel">
+  <div>
+    <h1>1+1次元ディラック方程式 リアルタイム可視化</h1>
+    <p class="sub">
+      i ∂ψ/∂t = [ -i α ∂/∂x + β(m + S(x)) + V(x) ] ψ ，
+      Weyl 表現 α=σ_z, β=σ_x ，ħ=c=1 ，長さの単位は換算コンプトン波長 ƛ_C（λ_C = 2π ƛ_C）
+    </p>
+  </div>
+
+  <div class="row">
+    <div class="checks">
+      <span class="group-label">表示</span>
+      <label class="chk"><input type="checkbox" id="showRho" checked><span style="color:var(--rho)">ρ</span></label>
+      <label class="chk"><input type="checkbox" id="showComp">|ψ₁|,|ψ₂|</label>
+      <label class="chk"><input type="checkbox" id="showReim">Re,Im</label>
+      <label class="chk"><input type="checkbox" id="showCurrent"><span style="color:var(--current)">j</span></label>
+      <label class="chk"><input type="checkbox" id="showFields" checked>V, S</label>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="label">t</div><div class="value" id="statT">0.00</div></div>
+      <div class="stat"><div class="label">ノルム</div><div class="value" id="statNorm">0.0000</div></div>
+      <div class="stat"><div class="label">吸収済み</div><div class="value" id="statAbs">0.0000</div></div>
+      <div class="stat"><div class="label">⟨x⟩</div><div class="value" id="statX">0.00</div></div>
+      <div class="stat"><div class="label">⟨v⟩ (|v|≤1)</div><div class="value" id="statV">0.000</div></div>
+      <div class="stat"><div class="label">⟨H⟩</div><div class="value" id="statE">0.000</div></div>
+      <div class="stat"><div class="label">w₊ : w₋ ※自由基底</div><div class="value" id="statW">— : —</div></div>
+    </div>
+  </div>
+
+  <div class="plotwrap">
+    <div class="yslider-col">
+      <label>Y軸範囲</label>
+      <input type="range" id="yscale" min="0.05" max="4" step="0.05" value="0.6">
+    </div>
+    <canvas id="plot" width="880" height="320"></canvas>
+  </div>
+  <p class="hint" id="hint">停止中: グラフをドラッグすると「描画対象」で選んだ量を直接描けます。</p>
+
+  <div class="plotwrap">
+    <canvas id="kplot" width="880" height="260"></canvas>
+  </div>
+  <p class="hint">
+    運動量空間: 実線が分散関係 E = ±√(k²+m²)、点線が光速の漸近線 E = ±k、線の太さが各分枝の重み。
+    重みは<strong>自由基底での射影</strong>であり、V や S が非ゼロのときは保存量でも粒子／反粒子分解でもありません。
+  </p>
+
+  <div class="sliders">
+    <div class="slider-block">
+      <div class="row2"><span>質量 m（実行中も変更可）</span><span id="mOut">1.00</span></div>
+      <input type="range" id="m" min="0" max="3" step="0.01" value="1">
+    </div>
+    <div class="slider-block">
+      <div class="row2"><span>時間発展の速度</span><span id="speedOut">8</span></div>
+      <input type="range" id="speed" min="1" max="20" step="1" value="8">
+    </div>
+    <div class="slider-block">
+      <div class="row2"><span>吸収層の幅 W（0 で吸収オフ）</span><span id="absOut">5.0</span></div>
+      <input type="range" id="absorb" min="0" max="10" step="0.5" value="5">
+    </div>
+    <div class="slider-block">
+      <div class="row2"><span>波束の中心 x₀</span><span id="x0Out">10.0</span></div>
+      <input type="range" id="x0" min="0" max="40" step="0.5" value="10">
+    </div>
+    <div class="slider-block">
+      <div class="row2"><span>波束の運動量 k₀</span><span id="k0Out">2.0</span></div>
+      <input type="range" id="k0" min="-20" max="20" step="0.5" value="2">
+    </div>
+    <div class="slider-block">
+      <div class="row2"><span>波束の幅 σ</span><span id="sigOut">2.0</span></div>
+      <input type="range" id="sigma" min="0.3" max="5" step="0.1" value="2">
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="btnStart">▶ 開始</button>
+    <button id="btnStop" disabled>■ 停止</button>
+    <button id="btnReset">↺ リセット</button>
+  </div>
+
+  <div class="row">
+    <div class="checks">
+      <span class="group-label">描画対象</span>
+      <label class="chk"><input type="radio" name="dt" value="V" checked>V(x)</label>
+      <label class="chk"><input type="radio" name="dt" value="S">S(x)</label>
+      <label class="chk"><input type="radio" name="dt" value="re1">Re ψ₁</label>
+      <label class="chk"><input type="radio" name="dt" value="im1">Im ψ₁</label>
+      <label class="chk"><input type="radio" name="dt" value="re2">Re ψ₂</label>
+      <label class="chk"><input type="radio" name="dt" value="im2">Im ψ₂</label>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="btnSmooth">平滑化</button>
+    <button id="btnProjPlus">正分枝へ射影</button>
+    <button id="btnProjMinus">負分枝へ射影</button>
+    <button id="btnNormalize">規格化</button>
+  </div>
+
+  <div class="buttons">
+    <button id="btnPkPlus">初期状態: 正分枝のみ</button>
+    <button id="btnPkMinus">初期状態: 負分枝のみ</button>
+    <button id="btnPkMix">初期状態: 50:50 混合</button>
+    <button id="btnPkNaive">初期状態: 素朴な固定スピノル</button>
+  </div>
+
+  <div class="buttons">
+    <button id="btnFldNone">外場: なし</button>
+    <button id="btnFldVStep">外場: 階段 V</button>
+    <button id="btnFldVBar">外場: 障壁 V</button>
+    <button id="btnFldSStep">外場: 階段 S</button>
+    <button id="btnFldSWell">外場: スカラー井戸 S</button>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
